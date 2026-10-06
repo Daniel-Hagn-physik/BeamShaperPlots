@@ -223,7 +223,7 @@ def test_regions_can_be_switched_off_everywhere(tmp_path):
         # Gegenprobe: mit Ringen sind sie da
         fig2 = Figure()
         func(fig2, res)
-        if key != "fit":
+        if key not in ("fit", "title"):   # Titelbild hat nie Ringe
             assert any(a.get_gid() == "region" for ax in fig2.axes for a in ax.get_children()), key
     save_report([compact(res)], tmp_path / "r.pdf", {"show_regions": False})
 
@@ -332,3 +332,59 @@ def test_uniformity_radius_nan_when_never_reached():
     """Sehr flaches, rauscharmes Profil: Schwelle wird nie erreicht -> NaN statt Zahl."""
     res = analyze_image(make_image(m=12, noise=0.05), AnalysisSettings())
     assert np.isnan(res.uniformity_radius_um) or res.uniformity_radius_um > 0
+
+
+def test_title_image_fills_titlepage_window(tmp_path):
+    """Titelbild: PDF exakt 155 x 185,7 mm, Bild fuellt die ganze Flaeche (kein weisser Rand),
+    unbearbeitet (keine Ringe, kein Text) und wird nicht im Standard-Export mitgespeichert."""
+    from PIL import Image
+    from beamshaper.analysis import analyze_file
+    from beamshaper.export import save_figures
+    from beamshaper.plotting import plot_title, title_window
+    from matplotlib.figure import Figure
+    p = tmp_path / "spot.bmp"
+    Image.fromarray(np.clip(make_airy(n=600), 0, 255).astype(np.uint8)).save(p)
+    res = analyze_file(p)
+    assert all("title" not in x.name for x in save_figures(res))
+    path = save_figures(res, which=["title"])[0]
+    assert path.name == "spot_title.pdf"
+    fig = Figure(figsize=(155 / 25.4, 185.7 / 25.4))
+    plot_title(fig, res, show_logo_hint=False)
+    ax = fig.axes[0]
+    assert ax.get_position().bounds == pytest.approx((0, 0, 1, 1), abs=1e-9)
+    assert not ax.patches and not ax.texts and not ax.lines
+    x0, x1 = ax.get_xlim(); y1, y0 = ax.get_ylim()
+    assert (y1 - y0) / (x1 - x0) == pytest.approx(185.7 / 155, rel=1e-9)
+    # Fenster liegt komplett im Kamerabild
+    assert x0 >= -0.5 and y0 >= -0.5 and x1 <= 599.5 and y1 <= 599.5
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    canvas = FigureCanvasAgg(fig)
+    canvas.draw()
+    rgb = np.asarray(canvas.buffer_rgba())[..., :3]
+    assert rgb.min(axis=2).max() < 250          # kein einziges weisses Pixel
+
+
+def test_title_window_beam_position():
+    from beamshaper.plotting import title_window
+    img = make_image(nx=2000, ny=2000, x0=1000, y0=1000)
+    res = analyze_image(img, AnalysisSettings())
+    x0, y0, W, H, shrunk = title_window(res, img, fill=0.3, pos_x=0.5, pos_y=0.6)
+    assert not shrunk
+    assert (1000 - x0) / W == pytest.approx(0.5, abs=0.01)
+    assert (1000 - y0) / H == pytest.approx(0.6, abs=0.01)
+
+
+def test_title_window_frames_whole_spot_grid():
+    """3x3-Spotgitter: das ganze Muster wird zentriert und fuellt `fill` der Breite."""
+    from beamshaper.plotting import title_window
+    ny, nx = 1200, 2000
+    img = np.full((ny, nx), 3.0)
+    for i in range(3):
+        for j in range(3):
+            y, x = 500 + 90 * i, 1200 + 90 * j
+            img[y - 30:y + 30, x - 30:x + 30] = 200
+    res = analyze_image(img, AnalysisSettings())
+    x0, y0, W, H, shrunk = title_window(res, img, fill=0.5)
+    assert x0 + W / 2 == pytest.approx(1290, abs=4)       # Mitte des Gitters
+    assert y0 + H / 2 == pytest.approx(590, abs=4)
+    assert 240 / W == pytest.approx(0.5, abs=0.03)

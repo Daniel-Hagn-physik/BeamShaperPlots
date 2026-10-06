@@ -19,7 +19,8 @@ import numpy as np
 from matplotlib.figure import Figure
 
 from .analysis import FlatTopResult
-from .plotting import FIGURES, EXPORT_SIZES, _rc
+from .plotting import (FIGURES, EXPORT_SIZES, DEFAULT_EXPORT, TITLE_H_MM, TITLE_W_MM,
+                       _rc, title_figsize)
 
 
 def today() -> str:
@@ -93,13 +94,20 @@ def save_figures(res: FlatTopResult, which=None, base: str | Path | None = None,
                  **kw) -> list[Path]:
     """Speichert jede Figur als eigenes PDF, ohne Titel (Parameter stehen im JSON)."""
     fmt = "pdf"
-    which = which or list(FIGURES)
+    which = which or list(DEFAULT_EXPORT)
     out = plot_dir(res.path, base)
     paths = []
     for key in which:
         _, func = FIGURES[key]
-        fig = Figure(figsize=EXPORT_SIZES[key])
+        if key == "title":    # exakt so gross wie das Fenster auf der Titelseite
+            size = title_figsize(kw.get("title_w_mm", TITLE_W_MM),
+                                 kw.get("title_h_mm", TITLE_H_MM))
+        else:
+            size = EXPORT_SIZES[key]
+        fig = Figure(figsize=size)
         extra = {k: v for k, v in kw.items() if k in func.__code__.co_varnames}
+        if key == "title":
+            extra["show_logo_hint"] = False      # Logo-Kasten nur in der Vorschau
         func(fig, res, **extra)
         p = out / f"{res.name}_{key}.{fmt}"
         # kein bbox_inches="tight": die Breite soll exakt 16 cm bleiben

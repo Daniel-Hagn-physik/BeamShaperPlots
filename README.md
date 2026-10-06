@@ -65,6 +65,36 @@ im JSON). Der Plotausschnitt wird automatisch so groß gewählt, dass Nebenstruk
 (z. B. Airy-Ringe) nicht abgeschnitten werden: Radius, bis zu dem das azimutal
 gemittelte Signal über dem Untergrund (Bildrand) liegt, plus 15 %.
 
+### Titelbild für die Titelseite der Thesis
+
+Reiter „Titelbild“ in der GUI, gespeichert mit „Titelbild als PDF speichern“ nach
+`Auswertung/Plots/JJJJ-MM-TT/<name>_title.pdf` (nicht im normalen Export/Batch).
+
+* Kamerabild ohne Fadenkreuz, Ringe, Text oder Achsen im gewählten Farbschema und mit
+  der gewählten Farbskala; standardmäßig unbearbeitet, mit „Hintergrund abziehen“ wird
+  das oben gewählte Hintergrundbild abgezogen (negative Werte → 0)
+* Ausschnitt richtet sich nach dem ganzen Strahl bzw. Muster (z. B. 3×3-Spotgitter):
+  Umriss bei 1/e² des Maximums, zentriert
+* PDF exakt so groß wie das Bildfenster der Titelseite: 155,0 × 185,7 mm
+  (Textbreite, vom Strich unter dem Titelblock bis zum Strich unten, gemessen in der
+  Masterthesis; in `APQ_Thesis_Vorlage.pdf` mit anderem Titelblock 184,9 mm), das Bild
+  füllt das PDF komplett – kein weißer Rand. Ändert sich der Titelblock (Titel- oder
+  Infozeilen), ändert sich die Höhe – mit `\titleimage*` passt LaTeX das automatisch an
+* einstellbar: Strahlgröße (Anteil des Musters an der Breite), Strahlposition x/y, Breite/Höhe.
+  Die Vorschau zeigt, wo die Logos liegen (nur Vorschau, nicht im PDF)
+* das Fenster liegt immer ganz im Kamerabild; ist das Bild zu klein, wird der
+  Ausschnitt verkleinert (Hinweis in der Vorschau)
+
+Einbinden **immer mit der Stern-Variante** (ohne Stern wird das PDF in seiner eigenen
+Größe gesetzt; ist das Fenster auch nur 0,1 mm höher, bleibt unten ein weißer Streifen
+bis zum Strich) – sie skaliert und beschneidet mittig exakt auf das
+Fenster zwischen den beiden Strichen, auch wenn der Titelblock etwas höher oder
+niedriger ist als in der Vorlage:
+
+```latex
+\titleimage*{\includegraphics{graphics/FlatTop_02_title.pdf}}
+```
+
 ## LaTeX
 
 Alle PDFs sind genau 16 cm breit (`\textwidth`, A4 mit 2,5 cm Rändern). Alle Texte
@@ -115,7 +145,8 @@ cmr10 wird bewusst nicht verwendet – dort liegt auf dem Zeichen „µ“ ein A
     beamshaper/imageio.py    Bilder laden (8/12/16 bit), Hintergrund erkennen
     beamshaper/models.py     Supergauss-Modell, Radius bei Level
     beamshaper/analysis.py   Fit + Kennzahlen -> FlatTopResult   (nur Rechnung)
-    beamshaper/plotting.py   Figuren aus FlatTopResult           (nur Plots)
+    beamshaper/plotting.py   Figuren aus FlatTopResult           (nur Plots, inkl. Titelbild)
+    beamshaper/report.py     PDF-Report (eine A4-Seite pro Bild, Batch-Vergleich)
     beamshaper/export.py     PDF / JSON / CSV
     beamshaper/batch.py      Ordner-Auswertung, auch als Kommandozeile
     beamshaper/gui.py        PyQt5-Oberfläche

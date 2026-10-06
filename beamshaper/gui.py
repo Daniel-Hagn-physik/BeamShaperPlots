@@ -254,6 +254,45 @@ class MainWindow(QMainWindow):
         f2.addRow(self.chk_circ)
         lay.addWidget(g2)
 
+        # Titelbild fuer die Titelseite der Thesis
+        g4 = QGroupBox("Titelbild (Titelseite Thesis)")
+        f4 = QFormLayout(g4)
+        tip = ("Unbearbeitetes Kamerabild im gewählten Farbschema, ohne Rand, Achsen,\n"
+               "Fadenkreuz oder Ringe. PDF exakt so groß wie das Bildfenster der\n"
+               "Titelseite (zwischen den beiden Strichen).\n"
+               "In LaTeX: \\titleimage*{\\includegraphics{<name>_title.pdf}}")
+        g4.setToolTip(tip)
+        self.sp_tfill = self._dspin(5, 100, 0, 45, " %")
+        self.sp_tfill.setToolTip("Strahl-Durchmesser (inkl. Nebenstruktur) als Anteil der Bildbreite.\n"
+                                 "Ist das Kamerabild zu klein, wird der Ausschnitt verkleinert.")
+        self.sp_tx = self._dspin(0, 100, 0, 50, " %")
+        self.sp_tx.setToolTip("Strahlzentrum horizontal im Fenster (0 = links, 100 = rechts)")
+        self.sp_ty = self._dspin(0, 100, 0, 50, " %")
+        self.sp_ty.setToolTip("Strahlzentrum vertikal im Fenster (0 = oben, 100 = unten).\n"
+                              "Die Logos liegen oben rechts.")
+        self.sp_tw = self._dspin(10, 300, 1, 155.0, " mm")
+        self.sp_th = self._dspin(10, 300, 1, 185.7, " mm")
+        self.sp_tw.setToolTip("Breite des Bildfensters = \\textwidth (A4, 31/24 mm Rand)")
+        self.sp_th.setToolTip("Höhe vom Strich unter dem Titelblock bis zum Strich unten\n"
+                              "(gemessen in der APQ-Vorlage)")
+        for sp in (self.sp_tfill, self.sp_tx, self.sp_ty, self.sp_tw, self.sp_th):
+            sp.valueChanged.connect(self.redraw)
+        self.chk_tbg = QCheckBox("Hintergrund abziehen")
+        self.chk_tbg.setToolTip("Zieht das oben unter „Hintergrund“ gewählte Bild ab\n"
+                                "(negative Werte werden 0). Ohne Hintergrundbild: unbearbeitet.")
+        self.chk_tbg.toggled.connect(self.redraw)
+        f4.addRow(self.chk_tbg)
+        f4.addRow("Strahlgröße (Anteil Breite)", self.sp_tfill)
+        f4.addRow("Position x", self.sp_tx)
+        f4.addRow("Position y", self.sp_ty)
+        f4.addRow("Breite", self.sp_tw)
+        f4.addRow("Höhe", self.sp_th)
+        b_title = QPushButton("Titelbild als PDF speichern")
+        b_title.setToolTip(tip)
+        b_title.clicked.connect(self.export_title)
+        f4.addRow(b_title)
+        lay.addWidget(g4)
+
         b_run = QPushButton("Neu auswerten")
         b_run.clicked.connect(self.run_analysis)
         b_exp = QPushButton("Exportieren (Plots + Report als PDF, JSON, CSV)")
@@ -355,13 +394,17 @@ class MainWindow(QMainWindow):
         self.lbl_sigma.setText(f"{sig * 1e3:.0f} nm")
 
     _PERSIST = ["sp_pixel", "sp_mag", "sp_roi", "sp_fitpx", "sp_plevel", "sp_pscale",
-                "sp_fstep", "sp_cut", "sp_font", "sp_uthr", "sp_pitch", "sp_temp", "sp_nu"]
+                "sp_fstep", "sp_cut", "sp_font", "sp_uthr", "sp_pitch", "sp_temp", "sp_nu",
+                "sp_tfill", "sp_tx", "sp_ty", "sp_tw", "sp_th"]
 
-    _PERSIST_CHK = ["chk_ell", "chk_text", "chk_fit", "chk_circ", "chk_batch_pdf", "chk_lattice"]
+    _PERSIST_CHK = ["chk_ell", "chk_text", "chk_fit", "chk_circ", "chk_batch_pdf", "chk_lattice",
+                    "chk_tbg"]
 
     def _load_settings(self):
         for name in self._PERSIST:
             v = self.qs.value(name)
+            if name == "sp_th" and v is not None and abs(float(v) - 184.9) < 1e-6:
+                v = None          # alter Standard (APQ-Vorlage) -> neuer Standard der Thesis
             if v is not None:
                 sp = getattr(self, name)
                 sp.blockSignals(True)
@@ -534,7 +577,25 @@ class MainWindow(QMainWindow):
                              "norm")[self.cb_cutscale.currentIndex()])
         return dict(cmap=self.cb_cmap.currentText(), show_regions=self.chk_ell.isChecked(),
                     show_text=self.chk_text.isChecked(), show_fit=self.chk_fit.isChecked(),
-                    show_circles=self.chk_circ.isChecked())
+                    show_circles=self.chk_circ.isChecked(),
+                    title_fill=self.sp_tfill.value() / 100, title_x=self.sp_tx.value() / 100,
+                    title_y=self.sp_ty.value() / 100, title_w_mm=self.sp_tw.value(),
+                    title_h_mm=self.sp_th.value(), title_bg=self.chk_tbg.isChecked())
+
+    def export_title(self):
+        """Nur das Titelbild speichern (Auswertung/Plots/JJJJ-MM-TT/<name>_title.pdf)."""
+        if self.result is None:
+            QMessageBox.information(self, "Titelbild", "Noch kein Ergebnis vorhanden.")
+            return
+        try:
+            p = save_figures(self.result, which=["title"], **self._plot_opts())[0]
+        except Exception as exc:
+            log("Titelbild: " + traceback.format_exc())
+            QMessageBox.warning(self, "Titelbild", str(exc))
+            return
+        self.statusBar().showMessage(
+            f"Titelbild gespeichert: {p}   –   LaTeX: \\titleimage*{{\\includegraphics{{{p.name}}}}}"
+            "  (mit Stern, sonst bleibt ein weißer Rand)")
 
     def _fill_table(self, res: FlatTopResult):
         rows = [(k, v) for k, v in res.summary().items() if k != "warnings"]

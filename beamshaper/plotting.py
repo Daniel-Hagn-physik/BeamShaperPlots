@@ -416,12 +416,179 @@ def plot_flatness(fig: Figure, res: FlatTopResult, show_regions: bool = True) ->
         ax.set_ylim(bottom=0)
 
 
+# ---------------------------------------------------------------------------
+# Titelbild fuer die Titelseite der Thesis (APQ-/TUDa-Vorlage)
+# ---------------------------------------------------------------------------
+# Bildfenster der Titelseite: volle Textbreite (A4, inner 31 mm, outer 24 mm)
+# und vom Strich unter dem Titelblock bis zum Strich unten. Gemessen in
+# APQ_Thesis_Vorlage.pdf: 155,0 mm x 184,9 mm (Strich-Unterkante bis
+# Strich-Unterkante, die Striche liegen ueber dem Bild).
+TITLE_W_MM = 155.0
+TITLE_H_MM = 184.9
+# Logo-Kaesten oben rechts im Fenster (mm, von links oben): x0, y0, x1, y1.
+# Nur als Hilfe in der GUI-Vorschau, wird nicht exportiert.
+TITLE_LOGO_BOX_MM = (106.6, 11.0, TITLE_W_MM, 54.5)
+
+_RAW_CACHE: dict = {}
+
+
+def _raw_image(res: FlatTopResult, subtract_bg: bool = False):
+    """Kamerabild fuer das Titelbild und Offset (oy, ox).
+
+    Standard: unbearbeitet (Bilddatei selbst, gecacht nach Pfad + Aenderungszeit).
+    subtract_bg=True: das in den Einstellungen gewaehlte Hintergrundbild wird
+    abgezogen (negative Werte -> 0); ohne Hintergrundbild bleibt es unbearbeitet.
+    Gibt es keine Datei (z. B. synthetisches Bild in den Tests), wird der
+    gespeicherte Darstellungsausschnitt verwendet.
+    """
+    from .imageio import load_image
+    p = Path(res.path) if res.path else None
+    if p is None or not p.is_file():
+        return res.view_data, (res.view[0], res.view[2])
+    bgp = res.settings.background_path if subtract_bg else None
+    bgp = Path(bgp) if bgp and Path(bgp).is_file() else None
+    key = (str(p), p.stat().st_mtime_ns,
+           (str(bgp), bgp.stat().st_mtime_ns) if bgp else None)
+    if key not in _RAW_CACHE:
+        img = load_image(p)[0]
+        if bgp is not None:
+            bg = load_image(bgp)[0]
+            if bg.shape != img.shape:
+                raise ValueError(f"Hintergrundbild {bg.shape} passt nicht zu {img.shape}")
+            img = np.clip(img - bg, 0, None)
+        _RAW_CACHE.clear()
+        _RAW_CACHE[key] = img
+    return _RAW_CACHE[key], (0, 0)
+
+
+def title_object_box(img: np.ndarray, offset=(0, 0), level: float = 0.135):
+    """Umriss des Strahls bzw. Musters (z. B. 3x3-Spotgitter) im Bild.
+
+    Leicht geglaettet; alle Pixel ueber `level` (Standard 1/e^2) zwischen Untergrund
+    (Median) und Maximum. Kleine Rauschinseln (< 5 % der groessten Flaeche) zaehlen
+    nicht. Rueckgabe: (cx, cy, Breite, Hoehe) in Pixeln (Bildkoordinaten) oder None.
+    """
+    from scipy import ndimage
+    b = max(1, int(max(img.shape) // 1000))          # grosse Bilder fuer die Suche binnen
+    small = img[: img.shape[0] // b * b, : img.shape[1] // b * b]
+    small = small.reshape(small.shape[0] // b, b, small.shape[1] // b, b).mean((1, 3))
+    sm = ndimage.gaussian_filter(small, 2)
+    base, peak = float(np.median(sm)), float(sm.max())
+    if peak <= base:
+        return None
+    lab, n = ndimage.label(sm > base + level * (peak - base))
+    if n == 0:
+        return None
+    area = np.bincount(lab.ravel())[1:]
+    keep = np.isin(lab, 1 + np.flatnonzero(area >= 0.05 * area.max()))
+    ys, xs = np.nonzero(keep)
+    oy, ox = offset
+    x0, x1 = xs.min() * b, (xs.max() + 1) * b
+    y0, y1 = ys.min() * b, (ys.max() + 1) * b
+    return (ox + (x0 + x1) / 2 - 0.5, oy + (y0 + y1) / 2 - 0.5, x1 - x0, y1 - y0)
+
+
+def title_window(res: FlatTopResult, img: np.ndarray, fill: float = 0.45, pos_x: float = 0.5,
+                 pos_y: float = 0.5, w_mm: float = TITLE_W_MM, h_mm: float = TITLE_H_MM,
+                 offset=(0, 0)):
+    """Ausschnitt (links, oben, Breite, Hoehe) in Pixelkoordinaten fuer das Titelbild.
+
+    - Seitenverhaeltnis exakt h_mm / w_mm, quadratische Pixel
+    - der Strahl bzw. das ganze Muster (Umriss bei 1/e^2, s. title_object_box)
+      nimmt `fill` der Fensterbreite ein (bzw. der Hoehe, falls es hoch ist)
+    - dessen Mitte liegt bei (pos_x, pos_y) im Fenster (0,5/0,5 = Mitte)
+    - das Fenster liegt immer vollstaendig im Kamerabild (kein Rand); ist das Bild
+      zu klein, wird das Fenster verkleinert (Strahl dann groesser als gewuenscht)
+    Rueckgabe: (x0, y0, W, H, verkleinert) - Pixelkanten, Pixel i reicht von i-0,5 bis i+0,5.
+    """
+    ny, nx = img.shape[:2]
+    oy, ox = offset
+    ratio = h_mm / w_mm
+    box = title_object_box(img, offset)
+    if box is None:                      # Rueckfall: Fit
+        a = max(a for a, _ in res.radii_px.values())
+        box = (res.fit.x0, res.fit.y0, 2 * a, 2 * a)
+    cx, cy, bw, bh = box
+    W = max(bw, bh / ratio) / max(fill, 1e-3)
+    H = W * ratio
+    shrunk = False
+    s = min(nx / W, ny / H, 1.0)
+    if s < 1.0:
+        W, H, shrunk = W * s, H * s, True
+    x0 = cx - pos_x * W
+    y0 = cy - pos_y * H
+    x0 = float(np.clip(x0, ox - 0.5, ox + nx - 0.5 - W))
+    y0 = float(np.clip(y0, oy - 0.5, oy + ny - 0.5 - H))
+    return x0, y0, W, H, shrunk
+
+
+def plot_title(fig: Figure, res: FlatTopResult, cmap: str = "jet",
+               title_fill: float = 0.45, title_x: float = 0.5, title_y: float = 0.5,
+               title_w_mm: float = TITLE_W_MM, title_h_mm: float = TITLE_H_MM,
+               title_bg: bool = False, show_logo_hint: bool = True) -> None:
+    """Unbearbeitetes Kamerabild im Farbschema, randlos, fuer die Titelseite.
+
+    Kein Fadenkreuz, keine Ringe, keine Achsen, kein Text. Hintergrundabzug nur mit
+    title_bg=True (Hintergrundbild aus den Einstellungen).
+    Export: Figur exakt title_w_mm x title_h_mm, das Bild fuellt sie vollstaendig.
+    In LaTeX:  \\titleimage*{\\includegraphics{<name>_title.pdf}}
+    (die Stern-Variante skaliert/beschneidet auf das Fenster zwischen den Strichen).
+    """
+    fig.clear()
+    _layout(fig, constrained=False)
+    img, (oy, ox) = _raw_image(res, title_bg)
+    x0, y0, W, H, shrunk = title_window(res, img, title_fill, title_x, title_y,
+                                        title_w_mm, title_h_mm, offset=(oy, ox))
+    # nur den benoetigten Teil (+1 px) einbetten -> kleines PDF (Indizes im Array)
+    ny, nx = img.shape
+    ix0 = max(0, int(np.floor(x0 - ox + 0.5)) - 1)
+    ix1 = min(nx, int(np.ceil(x0 - ox + W + 0.5)) + 1)
+    iy0 = max(0, int(np.floor(y0 - oy + 0.5)) - 1)
+    iy1 = min(ny, int(np.ceil(y0 - oy + H + 0.5)) + 1)
+    cm = _mpl.colormaps[cmap] if hasattr(_mpl, "colormaps") else _mpl.cm.get_cmap(cmap)
+
+    # Export: Hintergrund in der untersten Farbe der Skala - selbst ein Rundungs-
+    # Haarstrich am Rand waere dann nicht weiss. Vorschau: grau, damit man das
+    # Fenster sieht.
+    fig.patch.set_facecolor("#B4B4B4" if show_logo_hint else cm(0.0))
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.imshow(img[iy0:iy1, ix0:ix1], cmap=cm, vmin=0, vmax=_int_max(res),
+              extent=(ox + ix0 - 0.5, ox + ix1 - 0.5, oy + iy1 - 0.5, oy + iy0 - 0.5),
+              interpolation="none", aspect="equal")
+    ax.set_xlim(x0, x0 + W)
+    ax.set_ylim(y0 + H, y0)
+    ax.set_axis_off()
+
+    if show_logo_hint:
+        from matplotlib.patches import Rectangle
+        k = W / title_w_mm                       # px pro mm
+        lx0, ly0, lx1, ly1 = TITLE_LOGO_BOX_MM
+        lx0, lx1 = lx0 * title_w_mm / TITLE_W_MM, lx1 * title_w_mm / TITLE_W_MM
+        ax.add_patch(Rectangle((x0 + lx0 * k, y0 + ly0 * k), (lx1 - lx0) * k,
+                               (ly1 - ly0) * k, fc="white", ec="black", ls="--",
+                               alpha=0.75, lw=1.0))
+        ax.text(x0 + (lx0 + lx1) / 2 * k, y0 + (ly0 + ly1) / 2 * k,
+                "Logos\n(nur Vorschau)", ha="center", va="center", fontsize=9)
+        note = f"{_comma(title_w_mm, 1)} × {_comma(title_h_mm, 1)} mm"
+        if shrunk:
+            note += " – Kamerabild zu klein, Ausschnitt verkleinert"
+        ax.text(0.01, 0.01, note, transform=ax.transAxes, color="white", fontsize=9,
+                ha="left", va="bottom")
+
+
+def title_figsize(w_mm: float = TITLE_W_MM, h_mm: float = TITLE_H_MM) -> tuple:
+    return (w_mm / 25.4, h_mm / 25.4)
+
+
 FIGURES = {
     "overview": ("Übersicht", plot_overview),
     "axes": ("Achsenschnitte", plot_axis_cuts),
     "fit": ("Fit & Residuum", plot_fit_residual),
     "flatness": ("Flatness", plot_flatness),
+    "title": ("Titelbild", plot_title),
 }
+# Standard-Export (Einzelbild + Batch) ohne das Titelbild; das wird gezielt gespeichert
+DEFAULT_EXPORT = ["overview", "axes", "fit", "flatness"]
 
 # Exportgroessen in Zoll; overview im Seitenverhaeltnis der Vorlage (1382 x 731 pt)
 EXPORT_SIZES = {          # alle 16 cm breit (\textwidth), Hoehe in Zoll
@@ -429,6 +596,7 @@ EXPORT_SIZES = {          # alle 16 cm breit (\textwidth), Hoehe in Zoll
     "axes": (TEXTWIDTH_IN, 2.9),
     "fit": (TEXTWIDTH_IN, 3.5),
     "flatness": (TEXTWIDTH_IN, 3.2),
+    "title": title_figsize(),        # wird beim Export aus title_w_mm/title_h_mm gesetzt
 }
 
 
