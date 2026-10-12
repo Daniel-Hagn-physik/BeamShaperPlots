@@ -28,9 +28,9 @@ from PyQt5.QtWidgets import (
 
 from .analysis import AnalysisSettings, FlatTopResult, analyze_file
 from .batch import run_batch
-from .export import save_figures, save_report_for, save_results
-from .imageio import IMAGE_SUFFIXES, is_background_file, list_images
-from .plotting import FIGURES, set_font_size, set_scale_mode
+from .export import save_comparison, save_figures, save_report_for, save_results
+from .imageio import IMAGE_SUFFIXES, is_background_file, is_simulation_file, list_images
+from .plotting import FIGURES, plot_comparison, set_font_size, set_scale_mode
 
 APP_NAME = "BeamShaperPlots"
 LOG_FILE = None   # wird von main.py gesetzt (crash.log)
@@ -47,6 +47,8 @@ def log(msg: str) -> None:
             pass
 # Standard-Datenordner im Repo; hier liegen die Messbilder
 DATA_DIR = Path(__file__).resolve().parents[1] / "Messdaten"
+# Dateifilter fuer alle Oeffnen-Dialoge: Kamerabilder und simulierte Profile (.npz)
+FILE_FILTER = ("Bilder und Simulationen (" + " ".join("*" + s for s in IMAGE_SUFFIXES) + ")")
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +110,9 @@ class MainWindow(QMainWindow):
         self.folder: Path | None = None
         self.current_path: str | None = None
         self.result: FlatTopResult | None = None
+        self.cmp_result: FlatTopResult | None = None    # Vergleichsbild (z. B. Simulation)
         self._req = 0
+        self._req_cmp = 0
         self._threads: list[QThread] = []
         self.batch_thread: BatchThread | None = None
 
@@ -293,6 +297,31 @@ class MainWindow(QMainWindow):
         f4.addRow(b_title)
         lay.addWidget(g4)
 
+        # Vergleich mit einem zweiten Profil, z. B. Simulation aus Multitone_Simulation
+        g5 = QGroupBox("Vergleich (z. B. Simulation)")
+        f5 = QFormLayout(g5)
+        tip5 = ("Zweites Profil neben dem aktuellen Bild, Reiter „Vergleich“.\n"
+                "Simulation: .npz aus Weighted_Multitone_Lens_GUI.py\n"
+                "(Knopf „Export 2D profile for BeamShaperPlots“) - bringt ihre\n"
+                "Pixelgröße selbst mit. Simulation steht links, beide auf ihr\n"
+                "Maximum normiert, gleicher Ausschnitt in µm.")
+        g5.setToolTip(tip5)
+        self.ed_cmp = QLineEdit(); self.ed_cmp.setPlaceholderText("kein Vergleichsprofil")
+        self.ed_cmp.setReadOnly(True)
+        self.ed_cmp.setToolTip(tip5)
+        crow = QHBoxLayout()
+        crow.addWidget(self.ed_cmp)
+        b_cmp = QToolButton(text="..."); b_cmp.clicked.connect(self.choose_comparison)
+        b_cmpx = QToolButton(text="x"); b_cmpx.clicked.connect(lambda: self._set_comparison(""))
+        crow.addWidget(b_cmp); crow.addWidget(b_cmpx)
+        f5.addRow("Profil", crow)
+        b_cmp_save = QPushButton("Vergleich als PDF speichern")
+        b_cmp_save.setToolTip("Auswertung/Plots/JJJJ-MM-TT/<Messung>_vs_<Simulation>_comparison.pdf\n"
+                              "(16 cm breit, neben dem Messbild)")
+        b_cmp_save.clicked.connect(self.export_comparison)
+        f5.addRow(b_cmp_save)
+        lay.addWidget(g5)
+
         b_run = QPushButton("Neu auswerten")
         b_run.clicked.connect(self.run_analysis)
         b_exp = QPushButton("Exportieren (Plots + Report als PDF, JSON, CSV)")
@@ -336,6 +365,15 @@ class MainWindow(QMainWindow):
             v.addWidget(canvas, stretch=1)
             self.figs[key] = (fig, canvas)
             self.tabs.addTab(page, title.replace("&", "&&"))
+
+        # Vergleich zweier Profile (eigene Figur, braucht zwei Ergebnisse)
+        page = QWidget()
+        v = QVBoxLayout(page)
+        self.fig_cmp = Figure(figsize=(8, 4))
+        self.canvas_cmp = FigureCanvas(self.fig_cmp)
+        v.addWidget(NavigationToolbar(self.canvas_cmp, page))
+        v.addWidget(self.canvas_cmp, stretch=1)
+        self.tabs.addTab(page, "Vergleich")
 
         page = QWidget()
         v = QVBoxLayout(page)
@@ -421,6 +459,9 @@ class MainWindow(QMainWindow):
             v = self.qs.value(name)
             if v is not None:
                 getattr(self, name).setCurrentIndex(int(v))
+        cmp_path = self.qs.value("cmp_path")
+        if cmp_path and Path(cmp_path).is_file():
+            self.ed_cmp.setText(str(cmp_path))     # ausgewertet wird mit dem ersten Bild
 
     def closeEvent(self, ev):
         for name in self._PERSIST:
@@ -432,6 +473,7 @@ class MainWindow(QMainWindow):
             self.qs.setValue(name, getattr(self, name).isChecked())
         if self.folder:
             self.qs.setValue("last_dir", str(self.folder))
+        self.qs.setValue("cmp_path", self.ed_cmp.text())
         if self.batch_thread and self.batch_thread.isRunning():
             self.batch_thread.cancel()
             self.batch_thread.wait(5000)
@@ -450,7 +492,7 @@ class MainWindow(QMainWindow):
 
     def choose_start_file(self):
         """Beim Programmstart: Datei auswaehlen (Start im Ordner Messdaten)."""
-        filt = "Bilder (" + " ".join("*" + s for s in IMAGE_SUFFIXES) + ")"
+        filt = FILE_FILTER
         start = str(DATA_DIR) if DATA_DIR.is_dir() else self._start_dir()
         path, _ = QFileDialog.getOpenFileName(self, "Welche Datei soll ausgewertet werden?",
                                               start, filt)
@@ -458,7 +500,7 @@ class MainWindow(QMainWindow):
             self.load_path(path)
 
     def open_file(self):
-        filt = "Bilder (" + " ".join("*" + s for s in IMAGE_SUFFIXES) + ")"
+        filt = FILE_FILTER
         path, _ = QFileDialog.getOpenFileName(self, "Bild öffnen", self._start_dir(), filt)
         if path:
             self.load_path(path)
@@ -482,6 +524,10 @@ class MainWindow(QMainWindow):
             if is_background_file(f):
                 it.setForeground(QColor("#8a8984"))
                 it.setToolTip("Hintergrundbild - wird im Batch übersprungen")
+            elif is_simulation_file(f):
+                it.setForeground(QColor("#1f5fa8"))
+                it.setToolTip("Simuliertes Profil (Multitone_Simulation), "
+                              "Pixelgröße aus der Datei")
             self.file_list.addItem(it)
             if p.is_file() and f == p:
                 select = it
@@ -502,7 +548,7 @@ class MainWindow(QMainWindow):
         self.run_analysis()
 
     def choose_background(self):
-        filt = "Bilder (" + " ".join("*" + s for s in IMAGE_SUFFIXES) + ")"
+        filt = FILE_FILTER
         path, _ = QFileDialog.getOpenFileName(self, "Hintergrundbild", self._start_dir(), filt)
         if path:
             self._set_background(path)
@@ -510,6 +556,80 @@ class MainWindow(QMainWindow):
     def _set_background(self, path: str):
         self.ed_bg.setText(path)
         self._debounce.start()
+
+    # -- Vergleichsprofil ---------------------------------------------------
+    def choose_comparison(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Vergleichsprofil (z. B. Simulation .npz)",
+                                              self._start_dir(), FILE_FILTER)
+        if path:
+            self._set_comparison(path)
+
+    def _set_comparison(self, path: str):
+        self.ed_cmp.setText(path)
+        self.qs.setValue("cmp_path", path)
+        if not path:
+            self.cmp_result = None
+            self._req_cmp += 1
+            self.redraw_comparison()
+            return
+        self.run_comparison()
+        self.tabs.setCurrentIndex(self.tabs.count() - 2)     # Reiter "Vergleich"
+
+    def run_comparison(self):
+        path = self.ed_cmp.text()
+        if not path:
+            return
+        self._req_cmp += 1
+        self._threads = [th for th in self._threads if not th.isFinished()]
+        t = AnalysisThread(self._req_cmp, path, self.settings())
+        t.done.connect(self._on_cmp_result)
+        t.failed.connect(self._on_cmp_failed)
+        self._threads.append(t)
+        t.start()
+
+    def _on_cmp_result(self, req_id: int, res: FlatTopResult):
+        if req_id != self._req_cmp:
+            return
+        self.cmp_result = res
+        self.redraw_comparison()
+
+    def _on_cmp_failed(self, req_id: int, msg: str):
+        if req_id != self._req_cmp:
+            return
+        log("Vergleichsprofil: " + msg)
+        QMessageBox.warning(self, "Vergleichsprofil", msg.split("\n\n")[0])
+
+    def redraw_comparison(self, *_):
+        fig = self.fig_cmp
+        try:
+            if self.result is None or self.cmp_result is None:
+                fig.clear()
+                fig.text(0.5, 0.5, "Bild links auswählen und unter „Vergleich“ ein zweites\n"
+                         "Profil wählen (z. B. Simulation .npz aus Multitone_Simulation).",
+                         ha="center", va="center", color="#52514e")
+            else:
+                self._plot_opts()            # Schriftgroesse setzen
+                plot_comparison(fig, self.result, self.cmp_result,
+                                cmap=self.cb_cmap.currentText())
+        except Exception as exc:
+            log("Plot 'Vergleich': " + traceback.format_exc())
+            fig.clear()
+            fig.text(0.5, 0.5, f"Plot fehlgeschlagen:\n{exc}", ha="center", va="center",
+                     color="#b3261e", wrap=True)
+        self.canvas_cmp.draw_idle()
+
+    def export_comparison(self):
+        if self.result is None or self.cmp_result is None:
+            QMessageBox.information(self, "Vergleich",
+                                    "Es braucht ein ausgewertetes Bild und ein Vergleichsprofil.")
+            return
+        try:
+            p = save_comparison(self.result, self.cmp_result, **self._plot_opts())
+        except Exception as exc:
+            log("Vergleich: " + traceback.format_exc())
+            QMessageBox.warning(self, "Vergleich", str(exc))
+            return
+        self.statusBar().showMessage(f"Vergleich gespeichert: {p}")
 
     # -- Auswertung ---------------------------------------------------------
     def run_analysis(self):
@@ -526,6 +646,20 @@ class MainWindow(QMainWindow):
         self._threads.append(t)
         self.statusBar().showMessage(f"Werte {Path(self.current_path).name} aus ...")
         t.start()
+        # Vergleichsprofil mit denselben Einstellungen neu auswerten
+        if self.ed_cmp.text() and (self.cmp_result is None
+                                   or self.cmp_result.settings != self._cmp_settings()):
+            self.run_comparison()
+
+    def _cmp_settings(self):
+        """Einstellungen, mit denen das Vergleichsprofil ausgewertet wuerde
+        (Simulation: Pixelgroesse aus der Datei, kein Hintergrund)."""
+        st = self.settings()
+        res = self.cmp_result
+        if res is not None and res.is_simulation:
+            st = replace(st, pixel_size_um=res.settings.pixel_size_um, magnification=1.0,
+                         background_path=None)
+        return st
 
     def _on_result(self, req_id: int, res: FlatTopResult):
         if req_id != self._req:
@@ -567,6 +701,7 @@ class MainWindow(QMainWindow):
                 fig.text(0.5, 0.5, f"Plot fehlgeschlagen:\n{exc}", ha="center", va="center",
                          color="#b3261e", wrap=True)
             canvas.draw_idle()
+        self.redraw_comparison()
         if errors:
             self.statusBar().showMessage("Plotfehler: " + " | ".join(errors))
 

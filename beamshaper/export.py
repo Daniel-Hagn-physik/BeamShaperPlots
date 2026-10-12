@@ -20,7 +20,7 @@ from matplotlib.figure import Figure
 
 from .analysis import FlatTopResult
 from .plotting import (FIGURES, EXPORT_SIZES, DEFAULT_EXPORT, TITLE_H_MM, TITLE_W_MM,
-                       _rc, title_figsize)
+                       _rc, title_figsize, comparison_order, plot_comparison)
 
 
 def today() -> str:
@@ -75,6 +75,7 @@ def result_to_dict(res: FlatTopResult) -> dict:
         "radii_um": {k: {"long": a, "short": b} for k, (a, b) in res.radii_um().items()},
         "summary": {k: _clean(v) for k, v in res.summary().items()},
         "lattice_estimate": _deep_clean(res.lattice),
+        "simulation": _deep_clean(res.simulation),
         "warnings": res.warnings,
     }
 
@@ -115,6 +116,23 @@ def save_figures(res: FlatTopResult, which=None, base: str | Path | None = None,
             fig.savefig(p, dpi=300)
         paths.append(p)
     return paths
+
+
+def save_comparison(res_a: FlatTopResult, res_b: FlatTopResult,
+                    base: str | Path | None = None, **kw) -> Path:
+    """Vergleich zweier Profile (Simulation links) als PDF, 16 cm breit.
+
+    Ablage neben der Messung (bzw. dem rechten Bild):
+    Auswertung/Plots/JJJJ-MM-TT/<rechts>_vs_<links>_comparison.pdf
+    """
+    (left, _), (right, _) = comparison_order(res_a, res_b)
+    fig = Figure(figsize=EXPORT_SIZES["comparison"])
+    extra = {k: v for k, v in kw.items() if k in plot_comparison.__code__.co_varnames}
+    plot_comparison(fig, res_a, res_b, **extra)
+    p = plot_dir(right.path, base) / f"{right.name}_vs_{left.name}_comparison.pdf"
+    with _rc():
+        fig.savefig(p, dpi=300)
+    return p
 
 
 def save_report_for(results, base_image: str | Path, name: str, plot_opts=None,

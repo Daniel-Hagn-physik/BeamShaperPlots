@@ -388,3 +388,47 @@ def test_title_window_frames_whole_spot_grid():
     assert x0 + W / 2 == pytest.approx(1290, abs=4)       # Mitte des Gitters
     assert y0 + H / 2 == pytest.approx(590, abs=4)
     assert 240 / W == pytest.approx(0.5, abs=0.03)
+
+
+# ---------------------------------------------------------------------------
+# Simuliertes Profil (.npz aus Multitone_Simulation) und Vergleich
+# ---------------------------------------------------------------------------
+def _write_sim(path, um_per_px=0.05, n=301, w_um=2.0):
+    """Gauss-Spot als Simulationsdatei wie aus Weighted_Multitone_Lens_GUI.py."""
+    import json
+    t = (np.arange(n) - (n - 1) / 2) * um_per_px
+    X, Y = np.meshgrid(t, t[::-1])
+    img = np.exp(-2 * (X ** 2 + Y ** 2) / w_um ** 2)
+    np.savez_compressed(path, image=img.astype(np.float32), um_per_px=um_per_px,
+                        x_um=t, y_um=t[::-1], params=json.dumps({"N_x": 1, "N_y": 1}))
+    return path
+
+
+def test_simulation_uses_its_own_pixel_size(tmp_path):
+    from beamshaper.analysis import analyze_file
+    p = _write_sim(tmp_path / "sim.npz", um_per_px=0.05, w_um=2.0)
+    # Kamera-Einstellungen duerfen die Pixelgroesse der Simulation nicht ueberschreiben
+    res = analyze_file(p, AnalysisSettings(pixel_size_um=1.45, magnification=43.75))
+    assert res.is_simulation
+    assert res.um_per_px == pytest.approx(0.05)
+    assert res.saturation_value == 1.0
+    assert res.saturated_fraction == 0.0
+    # Gauss: 1/e^2-Durchmesser = 2 w
+    assert res.summary()["D_long_1/e2_um"] == pytest.approx(4.0, rel=0.02)
+    assert res.simulation["N_x"] == 1
+
+
+def test_comparison_plot_and_export(tmp_path):
+    from beamshaper.analysis import analyze_file
+    from beamshaper.export import save_comparison
+    from beamshaper.plotting import comparison_order
+    from PIL import Image
+    sim = analyze_file(_write_sim(tmp_path / "sim.npz", um_per_px=0.05))
+    img = make_image(nx=400, ny=400, x0=200, y0=200, wa=40, wb=30, noise=0.5)
+    Image.fromarray(np.clip(img, 0, 255).astype(np.uint8)).save(tmp_path / "mess.png")
+    meas = analyze_file(tmp_path / "mess.png", AnalysisSettings(pixel_size_um=0.05,
+                                                                  magnification=1.0))
+    (left, l_lab), (right, r_lab) = comparison_order(meas, sim)
+    assert left is sim and l_lab == "Simulation" and r_lab == "Measurement"
+    p = save_comparison(meas, sim, base=tmp_path)
+    assert p.is_file() and p.name == "mess_vs_sim_comparison.pdf"

@@ -108,6 +108,7 @@ STYLE = {
 LEVEL_TEX = {"1/e2": r"$1/e^2$", "50%": "50%", "90%": "90%"}
 INT_LABEL = "Intensity (a. u.)"
 INT_LABEL_NORM = "Intensity (norm.)"
+INT_LABEL_REL = r"$I/I_\mathrm{max}$"      # wie in den Simulationsplots
 POS_LABEL = "Position (µm)"
 
 
@@ -417,6 +418,94 @@ def plot_flatness(fig: Figure, res: FlatTopResult, show_regions: bool = True) ->
 
 
 # ---------------------------------------------------------------------------
+# Vergleich zweier Profile (z. B. Simulation aus Multitone_Simulation und Messung)
+# ---------------------------------------------------------------------------
+def comparison_order(res_a: FlatTopResult, res_b: FlatTopResult):
+    """Reihenfolge und Beschriftung fuer den Vergleich: Simulation links.
+
+    Rueckgabe: [(res, label), (res, label)]."""
+    pair = [res_a, res_b]
+    if res_b.is_simulation and not res_a.is_simulation:
+        pair = [res_b, res_a]
+
+    def label(r):
+        if r.is_simulation and not (res_a.is_simulation and res_b.is_simulation):
+            return "Simulation"
+        if not r.is_simulation and (res_a.is_simulation or res_b.is_simulation):
+            return "Measurement"
+        return r.name
+    return [(r, label(r)) for r in pair]
+
+
+def _norm_view(res: FlatTopResult):
+    """Darstellungsausschnitt auf 0 ... 1 normiert: (I - Untergrund) / (Peak - Untergrund).
+
+    Peak = Maximum nach leichter Glaettung (1 px), damit ein einzelnes
+    Rauschpixel im Kamerabild die Skala nicht bestimmt. Untergrund = Bildrand-
+    Mittel wie in der Auswertung (Simulation: praktisch 0)."""
+    from scipy import ndimage
+    v = np.asarray(res.view_data, dtype=float)
+    bg = float(res.background)
+    peak = float(ndimage.gaussian_filter(v, 1.0).max())
+    span = peak - bg if peak > bg else 1.0
+    return (v - bg) / span
+
+
+def comparison_halfwidth(res_a: FlatTopResult, res_b: FlatTopResult) -> float:
+    """Gemeinsame Halbbreite (um) des Ausschnitts: so gross wie der groessere der
+    beiden Plotausschnitte (Nebenstruktur sichtbar), aber nicht groesser als das,
+    was beide Bilder um ihr Zentrum hergeben (kein leerer Rand)."""
+    want = max(_cut_halfwidth(res_a), _cut_halfwidth(res_b))
+    have = []
+    for r in (res_a, res_b):
+        x0, x1, y1, y0 = _extent_um(r, r.view)
+        have.append(min(-x0, x1, -y0, y1))
+    return float(min(want, *have))
+
+
+def plot_comparison(fig: Figure, res_a: FlatTopResult, res_b: FlatTopResult,
+                    cmap: str = "jet", half_um: float | None = None,
+                    show_crosshair: bool = False) -> None:
+    """Zwei 2D-Profile nebeneinander, gleicher Ausschnitt (um) um das jeweilige
+    Zentrum, jedes auf sein Maximum normiert (I/I_max), gemeinsame Farbskala
+    so hoch wie die Bilder. Ohne Ueberschriften.
+
+    Simulation steht links. Achsen in um relativ zum Fitzentrum, y nach oben.
+    """
+    fig.clear()
+    _layout(fig, w_pad=0.04, h_pad=0.04, wspace=0.06)
+    order = comparison_order(res_a, res_b)
+    hw = half_um if half_um else comparison_halfwidth(res_a, res_b)
+    with _rc():
+        axs = fig.subplots(1, 2, sharex=True, sharey=True)
+        im = None
+        for ax, (r, lab) in zip(axs, order):
+            x0, x1, yb, yt = _extent_um(r, r.view)        # y nach unten (Bild)
+            im = ax.imshow(_norm_view(r), cmap=cmap, vmin=0, vmax=1,
+                           extent=[x0, x1, -yb, -yt],   # y nach oben
+                           interpolation="nearest", aspect="equal")
+            ax.grid(False)
+            ax.set_xlim(-hw, hw)
+            ax.set_ylim(-hw, hw)
+            ax.set_xlabel(r"$x$ (µm)")
+            if show_crosshair:
+                ax.axhline(0, color="black", lw=0.6, ls="--")
+                ax.axvline(0, color="black", lw=0.6, ls="--")
+        axs[0].set_ylabel(r"$y$ (µm)")
+        from matplotlib.ticker import MaxNLocator
+        for loc in (axs[0].xaxis, axs[0].yaxis):
+            loc.set_major_locator(MaxNLocator(nbins=5, integer=True, symmetric=True))
+        # Farbskala exakt so hoch wie die Bildflaeche: als Inset-Achse in
+        # Achsenkoordinaten des rechten Bildes - folgt dessen tatsaechlicher
+        # Position (aspect="equal"), auch beim Vergroessern des GUI-Fensters.
+        cax = axs[1].inset_axes([1.05, 0.0, 0.05, 1.0])
+        cb = fig.colorbar(im, cax=cax)
+        cb.set_label(INT_LABEL_REL)
+        cb.outline.set_visible(False)
+        cb.ax.tick_params(length=0)
+
+
+# ---------------------------------------------------------------------------
 # Titelbild fuer die Titelseite der Thesis (APQ-/TUDa-Vorlage)
 # ---------------------------------------------------------------------------
 # Bildfenster der Titelseite: volle Textbreite (A4, inner 31 mm, outer 24 mm)
@@ -597,6 +686,7 @@ EXPORT_SIZES = {          # alle 16 cm breit (\textwidth), Hoehe in Zoll
     "fit": (TEXTWIDTH_IN, 3.5),
     "flatness": (TEXTWIDTH_IN, 3.2),
     "title": title_figsize(),        # wird beim Export aus title_w_mm/title_h_mm gesetzt
+    "comparison": (TEXTWIDTH_IN, 3.05),
 }
 
 

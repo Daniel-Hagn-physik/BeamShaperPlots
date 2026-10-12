@@ -95,6 +95,32 @@ niedriger ist als in der Vorlage:
 \titleimage*{\includegraphics{graphics/FlatTop_02_title.pdf}}
 ```
 
+### Vergleich mit der Simulation (Multitone_Simulation)
+
+Simulierte 2D-Profile lassen sich wie Messbilder öffnen und mit einer Messung
+vergleichen.
+
+1. In `Multitone_Simulation/GUI/Flattop GUI/Weighted_Multitone_Lens_GUI.py`
+   Parameter einstellen und **„Export 2D profile for BeamShaperPlots (.npz)“** drücken.
+   Gespeichert wird das statische Profil der eigenen Site (mit dem Interferenzterm
+   frequenzentarteter Spots, wie im Hauptplot) als
+   `GUI/Bilder/FlatMultiTone_profile_<NxN>_<width>MHz_w<waist>um_f<f1>-<f2>mm_<Zeit>.npz`
+   (+ `.txt` mit allen Parametern). Raster wie die Laborkamera (1,45/43,75 µm pro
+   Pixel, 20 µm Bildfeld um die Atom-Mitte), normiert auf das Maximum 1, Zeile 0 oben.
+2. Die `.npz` in BeamShaperPlots öffnen (z. B. nach `Messdaten/` kopieren). Die
+   Pixelgröße kommt aus der Datei, die Kamera-Einstellungen gelten dafür nicht;
+   kein Hintergrundabzug, keine Übersteuerung. Alle Plots und der Report wie bei
+   einem Messbild (Intensitätsskala 0 … 1).
+3. Vergleich: Messbild auswählen, unter **„Vergleich (z. B. Simulation)“** die `.npz`
+   wählen → Reiter „Vergleich“: beide 2D-Profile nebeneinander (Simulation links),
+   jedes auf sein Maximum normiert ((I − Untergrund)/(Peak − Untergrund)), gleicher
+   Ausschnitt in µm um das jeweilige Zentrum, gemeinsame Farbskala.
+   „Vergleich als PDF speichern“ →
+   `Auswertung/Plots/JJJJ-MM-TT/<Messung>_vs_<Simulation>_comparison.pdf` (16 cm breit).
+
+Für gleich große Ausschnitte in Übersicht und Vergleich die „Schnitt-Halbbreite“
+fest einstellen (z. B. 8 µm).
+
 ## LaTeX
 
 Alle PDFs sind genau 16 cm breit (`\textwidth`, A4 mit 2,5 cm Rändern). Alle Texte
@@ -142,10 +168,10 @@ cmr10 wird bewusst nicht verwendet – dort liegt auf dem Zeichen „µ“ ein A
 
     main.py                  Start der GUI
     Messdaten/               Messbilder (BMP, PNG, TIFF, JPG); Auswertung landet in Messdaten/Auswertung/
-    beamshaper/imageio.py    Bilder laden (8/12/16 bit), Hintergrund erkennen
+    beamshaper/imageio.py    Bilder laden (8/12/16 bit), Hintergrund erkennen, Simulationen (.npz)
     beamshaper/models.py     Supergauss-Modell, Radius bei Level
     beamshaper/analysis.py   Fit + Kennzahlen -> FlatTopResult   (nur Rechnung)
-    beamshaper/plotting.py   Figuren aus FlatTopResult           (nur Plots, inkl. Titelbild)
+    beamshaper/plotting.py   Figuren aus FlatTopResult           (nur Plots, inkl. Titelbild, Vergleich)
     beamshaper/report.py     PDF-Report (eine A4-Seite pro Bild, Batch-Vergleich)
     beamshaper/export.py     PDF / JSON / CSV
     beamshaper/batch.py      Ordner-Auswertung, auch als Kommandozeile

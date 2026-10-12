@@ -27,7 +27,7 @@ import numpy as np
 from scipy import ndimage
 from scipy.optimize import curve_fit
 
-from .imageio import load_image
+from .imageio import is_simulation_file, load_image, load_simulation
 from .models import (
     supergaussian_2d,
     radius_at_level,
@@ -138,11 +138,16 @@ class FlatTopResult:
     lattice: dict | None = None        # Abschaetzung im Fallengitter, s. lattice_estimate()
     background: float = 0.0            # Untergrund (Bildrand-Mittel), Counts
     background_err: float = 0.0        # dessen Unsicherheit (Rand-Ungleichmaessigkeit)
+    simulation: dict | None = None     # Parameter, falls simuliertes Profil (.npz), sonst None
 
     # -- Hilfen ------------------------------------------------------------
     @property
     def name(self) -> str:
         return Path(self.path).stem
+
+    @property
+    def is_simulation(self) -> bool:
+        return self.simulation is not None
 
     @property
     def um_per_px(self) -> float:
@@ -722,7 +727,27 @@ def load_background(path: str | None):
     return _BG_CACHE[path]
 
 
+def analyze_simulation(path: str | Path, settings: AnalysisSettings | None = None) -> FlatTopResult:
+    """Simuliertes 2D-Profil (.npz) mit denselben Einstellungen wie ein Messbild.
+
+    Pixelgroesse kommt aus der Datei (pixel_size_um = um pro Pixel, Vergroesserung
+    1), kein Hintergrundabzug, keine Uebersteuerung. Intensitaet: Maximum = 1.
+    """
+    from dataclasses import replace
+    sim = load_simulation(path)
+    s_sim = replace(settings or AnalysisSettings(), pixel_size_um=sim["um_per_px"],
+                    magnification=1.0, background_path=None)
+    res = analyze_image(sim["image"], s_sim, str(path), sim["saturation"])
+    res.saturated_fraction = 0.0
+    res.warnings = [w for w in res.warnings
+                    if "übersteuert" not in w and "Rausch" not in w]
+    res.simulation = dict(sim["params"]) or {"source": "Simulation"}
+    return res
+
+
 def analyze_file(path: str | Path, settings: AnalysisSettings | None = None) -> FlatTopResult:
+    if is_simulation_file(path):
+        return analyze_simulation(path, settings)
     settings = settings or AnalysisSettings()
     img, sat = load_image(path)
     raw_max = img.max()
